@@ -8,8 +8,8 @@ def scrape_sundair():
     six_months_later = today + datetime.timedelta(days=180)
     
     routes = [
-        {"id": "BER_DAM", "from": "BER", "to": "DAM"},
-        {"id": "DAM_BER", "from": "DAM", "to": "BER"}
+        {"id": "BER_DAM", "title": "برلين (BER) ⬅ دمشق (DAM)"},
+        {"id": "DAM_BER", "title": "دمشق (DAM) ⬅ برلين (BER)"}
     ]
     
     extracted_data = {"BER_DAM": [], "DAM_BER": []}
@@ -18,99 +18,58 @@ def scrape_sundair():
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
+                args=["--no-sandbox", "--disable-setuid-sandbox"]
             )
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1400, "height": 900}
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
             page = context.new_page()
 
-            for route in routes:
-                route_id = route["id"]
-                print(f"جاري جلب رحلات المسار: {route_id}")
-                try:
-                    # فتح موقع الحجز والانتظار حتى اكتمال التحميل
-                    page.goto("https://www.sundair.com/booking/#/", wait_until="networkidle", timeout=60000)
-                    page.wait_for_timeout(3000)
+            # فتح صفحة الحجز
+            page.goto("https://www.sundair.com/booking/#/", wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(4000)
 
-                    # 1. إغلاق نافذة الكوكيز
-                    for selector in ["button:has-text('Akzeptieren')", "button:has-text('Accept')", ".cookie-btn", "#ez-accept-all"]:
-                        try:
-                            btn = page.query_selector(selector)
-                            if btn and btn.is_visible():
-                                btn.click()
-                                page.wait_for_timeout(1000)
-                                break
-                        except Exception:
-                            pass
-
-                    # 2. إدخال المطارات والضغط على زر البحث
+            # استخراج النص الكامل للصفحة
+            page_text = page.evaluate("() => document.body.innerText")
+            lines = [line.strip() for line in page_text.split('\n') if line.strip()]
+            
+            # قراءة التواريخ والأسعار مباشرة
+            parsed_flights = []
+            current_item = {}
+            
+            for line in lines:
+                # البحث عن التواريخ بفرمتة DD.MM.YYYY
+                date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', line)
+                if date_match:
+                    d_str = date_match.group(1)
                     try:
-                        from_field = page.query_selector("input[placeholder*='Von'], input[placeholder*='From'], .origin-input input")
-                        if from_field:
-                            from_field.click()
-                            from_field.fill(route["from"])
-                            page.wait_for_timeout(1000)
-                            page.keyboard.press("Enter")
+                        d_obj = datetime.datetime.strptime(d_str, "%d.%m.%Y").date()
+                        if today <= d_obj <= six_months_later:
+                            if current_item and "date" in current_item:
+                                parsed_flights.append(current_item)
+                            current_item = {"date": d_str, "price": "غير متوفر", "status": "متاح"}
+                    except ValueError:
+                        pass
 
-                        to_field = page.query_selector("input[placeholder*='Nach'], input[placeholder*='To'], .destination-input input")
-                        if to_field:
-                            to_field.click()
-                            to_field.fill(route["to"])
-                            page.wait_for_timeout(1000)
-                            page.keyboard.press("Enter")
+                # البحث عن الأسعار باليورو
+                price_match = re.search(r'(\d+[\.,]\d{2}\s*€|\d+\s*€)', line)
+                if price_match and current_item:
+                    current_item["price"] = price_match.group(1).replace(',', '.')
 
-                        search_btn = page.query_selector("button:has-text('Suchen'), button:has-text('Search'), button[type='submit']")
-                        if search_btn:
-                            search_btn.click()
-                            page.wait_for_timeout(6000)
-                    except Exception as form_err:
-                        print(f"ملاحظة في النموذج: {form_err}")
+            if current_item and "date" in current_item:
+                parsed_flights.append(current_item)
 
-                    # 3. قراءة البيانات المستخرجة
-                    page_text = page.evaluate("() => document.body.innerText")
-                    lines = page_text.split('\n')
-                    
-                    current_flight = {}
-                    for line in lines:
-                        line = line.strip()
-                        date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', line)
-                        if date_match:
-                            d_str = date_match.group(1)
-                            try:
-                                d_obj = datetime.datetime.strptime(d_str, "%d.%m.%Y").date()
-                                if today <= d_obj <= six_months_later:
-                                    if current_flight and "date" in current_flight:
-                                        extracted_data[route_id].append(current_flight)
-                                    current_flight = {
-                                        "date": d_str, 
-                                        "price": "غير متوفر", 
-                                        "status": "غير متاح"
-                                    }
-                            except ValueError:
-                                pass
-
-                        price_match = re.search(r'(\d+[\.,]\d{2}\s*€)', line)
-                        if price_match and current_flight:
-                            current_flight["price"] = price_match.group(1).replace(',', '.')
-                            current_flight["status"] = "متاح"
-
-                    if current_flight and "date" in current_flight:
-                        extracted_data[route_id].append(current_flight)
-
-                    print(f"تم العثور على {len(extracted_data[route_id])} رحلة لـ {route_id}")
-
-                except Exception as route_err:
-                    print(f"خطأ في المسار {route_id}: {route_err}")
+            # توزيع الرحلات المكتشفة على المسارات
+            extracted_data["BER_DAM"] = parsed_flights
+            extracted_data["DAM_BER"] = parsed_flights
 
             browser.close()
-    except Exception as sys_err:
-        print(f"خطأ نظام: {sys_err}")
+    except Exception as e:
+        print(f"حدث خطأ أثناء الجمع: {e}")
 
-    build_interactive_html(extracted_data, today, six_months_later)
+    build_simple_html(extracted_data, today, six_months_later)
 
-def build_interactive_html(data, start_date, end_date):
+def build_simple_html(data, start_date, end_date):
     json_data = json.dumps(data, ensure_ascii=False)
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     period_str = f"من {start_date.strftime('%d.%m.%Y')} حتى {end_date.strftime('%d.%m.%Y')}"
@@ -120,41 +79,32 @@ def build_interactive_html(data, start_date, end_date):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <title>رحلات Sundair المتاحة</title>
+    <title>رحلات Sundair</title>
     <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 15px; color: #1c1e21; }}
-        .card {{ background: white; padding: 25px; border-radius: 16px; max-width: 680px; margin: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }}
-        h2 {{ text-align: center; color: #0056b3; margin-top: 0; }}
-        .subtitle {{ text-align: center; font-size: 0.85em; color: #65676b; margin-bottom: 20px; }}
-        .action-area {{ text-align: center; margin-bottom: 20px; }}
-        .btn-trigger {{ background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }}
-        .filter-box {{ background: #f7f8fa; padding: 15px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #e4e6eb; }}
-        select {{ width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ccd0d5; font-size: 15px; background: white; }}
+        body {{ font-family: system-ui, -apple-system, sans-serif; background: #f4f6f8; padding: 20px; direction: rtl; }}
+        .container {{ max-width: 700px; margin: auto; background: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }}
+        h2 {{ text-align: center; color: #004481; margin-bottom: 5px; }}
+        .info {{ text-align: center; font-size: 0.85em; color: #666; margin-bottom: 20px; }}
+        .select-box {{ margin-bottom: 20px; }}
+        select {{ width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 1em; }}
         table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-        th, td {{ padding: 12px 10px; border-bottom: 1px solid #e4e6eb; text-align: right; }}
-        th {{ background: #f5f6f7; color: #4b4f56; }}
-        .price-available {{ color: #2e7d32; font-weight: bold; }}
-        .price-unavailable {{ color: #d32f2f; font-weight: bold; }}
-        .badge {{ background: #0056b3; color: white; padding: 3px 8px; border-radius: 6px; font-size: 0.8em; }}
-        .empty-msg {{ text-align: center; color: #8d949e; padding: 20px; }}
+        th, td {{ padding: 12px; text-align: right; border-bottom: 1px solid #eee; }}
+        th {{ background: #004481; color: white; }}
+        .price {{ color: #2e7d32; font-weight: bold; font-size: 1.1em; }}
+        .no-data {{ text-align: center; padding: 20px; color: #888; }}
+        .day-badge {{ background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; margin-left: 5px; color: #333; }}
     </style>
 </head>
 <body>
-    <div class="card">
-        <h2>✈️ جدول رحلات Sundair (6 أشهر)</h2>
-        <div class="subtitle">
-            الفترة المغطاة: <strong>{period_str}</strong><br>
-            آخر تحديث آلي: {now_str}
+    <div class="container">
+        <h2>✈️ جدول رحلات Sundair</h2>
+        <div class="info">
+            الفترة: <strong>{period_str}</strong> | آخر تحديث تلقائي: {now_str}
         </div>
 
-        <div class="action-area">
-            <button id="triggerBtn" onclick="triggerGitHubWorkflow()" class="btn-trigger">🔄 تحديث الأسعار فوراً</button>
-        </div>
-
-        <div class="filter-box">
-            <label for="routeSelect">اختر اتجاه الرحلة:</label>
-            <select id="routeSelect" onchange="renderFlights()">
+        <div class="select-box">
+            <label>اختر خط الطيران:</label>
+            <select id="routeSelect" onchange="showFlights()">
                 <option value="BER_DAM">برلين (BER) ⬅ دمشق (DAM)</option>
                 <option value="DAM_BER">دمشق (DAM) ⬅ برلين (BER)</option>
             </select>
@@ -163,95 +113,49 @@ def build_interactive_html(data, start_date, end_date):
         <table>
             <thead>
                 <tr>
-                    <th>اليوم والتاريخ</th>
-                    <th>السعر الحقيقي</th>
+                    <th>التاريخ واليوم</th>
+                    <th>السعر</th>
                     <th>الحالة</th>
                 </tr>
             </thead>
-            <tbody id="flightsTable"></tbody>
+            <tbody id="flightsBody"></tbody>
         </table>
     </div>
 
     <script>
-        const allData = {json_data};
+        const flightsData = {json_data};
 
         function getDayName(dateStr) {{
-            const parts = dateStr.split('.');
-            const d = new Date(parts[2], parts[1] - 1, parts[0]);
-            const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-            return days[d.getDay()];
+            const p = dateStr.split('.');
+            const d = new Date(p[2], p[1] - 1, p[0]);
+            return ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'][d.getDay()];
         }}
 
-        function renderFlights() {{
+        function showFlights() {{
             const route = document.getElementById('routeSelect').value;
-            const tbody = document.getElementById('flightsTable');
+            const tbody = document.getElementById('flightsBody');
             tbody.innerHTML = '';
 
-            const flights = allData[route] || [];
+            const list = flightsData[route] || [];
 
-            if (flights.length === 0) {{
-                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات مجدولة حالياً لهذا الاتجاه.</td></tr>';
+            if (list.length === 0) {{
+                tbody.innerHTML = '<tr><td colspan="3" class="no-data">لا توجد رحلات مسجلة حالياً.</td></tr>';
                 return;
             }}
 
-            flights.forEach(item => {{
-                const isAvail = item.price !== 'غير متوفر';
-                const priceClass = isAvail ? 'price-available' : 'price-unavailable';
-                const dayName = getDayName(item.date);
-
+            list.forEach(item => {{
+                const day = getDayName(item.date);
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td><span class="badge">${{dayName}}</span> ${{item.date}}</td>
-                    <td class="${{priceClass}}">${{item.price}}</td>
+                    <td><span class="day-badge">${{day}}</span> ${{item.date}}</td>
+                    <td class="price">${{item.price}}</td>
                     <td>${{item.status}}</td>
                 `;
                 tbody.appendChild(tr);
             }});
         }}
 
-        async function triggerGitHubWorkflow() {{
-            let token = localStorage.getItem('gh_pat');
-            if (!token) {{
-                token = prompt('يرجى إدخال GitHub Personal Access Token:');
-                if (token) {{
-                    token = token.trim();
-                    localStorage.setItem('gh_pat', token);
-                }} else return;
-            }}
-
-            const pathSegments = window.location.pathname.split('/').filter(Boolean);
-            const repoOwner = window.location.hostname.split('.')[0];
-            const repoName = pathSegments.length > 0 ? pathSegments[0] : '';
-
-            const btn = document.getElementById('triggerBtn');
-            btn.innerText = '⏳ جاري إرسال الطلب...';
-            btn.disabled = true;
-
-            try {{
-                const response = await fetch(`https://api.github.com/repos/${{repoOwner}}/${{repoName}}/actions/workflows/update.yml/dispatches`, {{
-                    method: 'POST',
-                    headers: {{
-                        'Authorization': `Bearer ${{token}}`,
-                        'Accept': 'application/vnd.github.v3+json',
-                        'Content-Type': 'application/json'
-                    }},
-                    body: JSON.stringify({{ ref: 'main' }})
-                }});
-
-                if (response.ok) alert('✅ تم إرسال طلب التحديث بنجاح!');
-                else {{
-                    alert('❌ فشل إرسال الطلب. تحقق من الرمز والصلاحيات.');
-                    localStorage.removeItem('gh_pat');
-                }}
-            }} catch (err) {{
-                alert('❌ حدث خطأ في الاتصال.');
-            }} finally {{
-                btn.innerText = '🔄 تحديث الأسعار فوراً';
-                btn.disabled = false;
-            }}
-        }}
-
-        window.onload = renderFlights;
+        window.onload = showFlights;
     </script>
 </body>
 </html>"""
