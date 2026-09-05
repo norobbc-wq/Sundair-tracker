@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>متابع أسعار Sundair الحية</title>
+    <title>أسعار Sundair الحية</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; padding: 15px; color: #333; }
         .card { background: white; padding: 20px; border-radius: 14px; max-width: 650px; margin: auto; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
@@ -11,7 +11,7 @@
         .filter-box { background: #f8f9fa; padding: 15px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #e9ecef; }
         .form-group { margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px; }
         label { font-weight: bold; font-size: 0.9em; }
-        select, input { padding: 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; }
+        select, input { padding: 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; background: white; }
         .row { display: flex; gap: 10px; }
         .row .form-group { flex: 1; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
@@ -26,7 +26,7 @@
 <body>
     <div class="card">
         <h2>📊 أسعار Sundair الحية</h2>
-        <div class="updated">آخر تحديث حقيقي: 2026-09-05 09:02</div>
+        <div class="updated">آخر تحديث حقيقي: 2026-09-05 09:09</div>
 
         <div class="filter-box">
             <div class="form-group">
@@ -64,23 +64,28 @@
     <script>
         const allData = {"BER_DAM": [{"date": "22.06.2026", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "15.05.2024", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "08.04.2024", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "24.11.2022", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "17.08.2021", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "25.04.2021", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}], "DAM_BER": [{"date": "22.06.2026", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "15.05.2024", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "08.04.2024", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "24.11.2022", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "17.08.2021", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}, {"date": "25.04.2021", "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}]};
 
-        function parseGermanDate(dateStr) {
+        function parseGermanDateStr(dateStr) {
             const parts = dateStr.split('.');
-            return new Date(parts[2], parts[1] - 1, parts[0]);
+            return `${parts[2]}-${parts[1]}-${parts[0]}`; // تحويل إلى YYYY-MM-DD
         }
 
-        function getDayName(dateObj) {
+        function getDayName(dateStr) {
+            const parts = dateStr.split('.');
+            const d = new Date(parts[2], parts[1] - 1, parts[0]);
             const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-            return days[dateObj.getDay()];
+            return days[d.getDay()];
+        }
+
+        function getDayNum(dateStr) {
+            const parts = dateStr.split('.');
+            const d = new Date(parts[2], parts[1] - 1, parts[0]);
+            return d.getDay();
         }
 
         function filterFlights() {
             const route = document.getElementById('routeSelect').value;
             const startVal = document.getElementById('startDate').value;
             const endVal = document.getElementById('endDate').value;
-            
-            const startDate = startVal ? new Date(startVal) : null;
-            const endDate = endVal ? new Date(endVal) : null;
 
             const tbody = document.getElementById('flightsTable');
             tbody.innerHTML = '';
@@ -88,20 +93,18 @@
             const flights = allData[route] || [];
 
             flights.forEach(item => {
-                const itemDate = parseGermanDate(item.date);
-                
-                // تصفية حسب التاريخ والأيام (الثلاثاء والسبت فقط)
-                const dayNum = itemDate.getDay();
+                const isoDate = parseGermanDateStr(item.date);
+                const dayNum = getDayNum(item.date);
                 const isTueOrSat = (dayNum === 2 || dayNum === 6);
-                
+
                 let inRange = true;
-                if (startDate && itemDate < startDate) inRange = false;
-                if (endDate && itemDate > endDate) inRange = false;
+                if (startVal && isoDate < startVal) inRange = false;
+                if (endVal && isoDate > endVal) inRange = false;
 
                 if (isTueOrSat && inRange) {
                     const isAvail = item.price !== 'غير متوفر';
                     const priceClass = isAvail ? 'price-available' : 'price-unavailable';
-                    const dayName = getDayName(itemDate);
+                    const dayName = getDayName(item.date);
 
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
