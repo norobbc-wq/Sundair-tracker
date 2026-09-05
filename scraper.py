@@ -5,11 +5,11 @@ from playwright.sync_api import sync_playwright
 
 def scrape_sundair():
     routes = [
-        {"id": "BER_DAM", "from": "BER", "to": "DAM", "name": "برلين (BER) ⬅ دمشق (DAM)"},
-        {"id": "DAM_BER", "from": "DAM", "to": "BER", "name": "دمشق (DAM) ⬅ برلين (BER)"}
+        {"id": "BER_DAM", "origin": "BER", "destination": "DAM"},
+        {"id": "DAM_BER", "origin": "DAM", "destination": "BER"}
     ]
     
-    extracted_data = {}
+    extracted_data = {"BER_DAM": [], "DAM_BER": []}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -20,31 +20,24 @@ def scrape_sundair():
 
         for route in routes:
             route_id = route["id"]
-            extracted_data[route_id] = []
-            
             try:
                 # الانتقال لموقع الحجز
                 page.goto("https://www.sundair.com/booking/#/", wait_until="networkidle", timeout=60000)
-                page.wait_for_timeout(4000)
+                page.wait_for_timeout(3000)
 
-                # استخراج نصوص كروت الرحلات المعروضة في الصفحة
-                flight_cards = page.query_selector_all("div[class*='flight'], div[class*='booking'], .flight-item")
-                
-                # جلب محتوى الصفحة لتقسيم الرحلات
+                # محاكاة اختيار الوجهات إذا تطلب الأمر أو قراءة الرحلات المتاحة في الواجهة
                 page_text = page.evaluate("() => document.body.innerText")
                 lines = page_text.split('\n')
                 
                 current_flight = {}
                 for line in lines:
                     line = line.strip()
-                    # البحث عن التاريخ (مثال: 26.09.2026)
                     date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', line)
                     if date_match:
                         if current_flight and "date" in current_flight:
                             extracted_data[route_id].append(current_flight)
                         current_flight = {"date": date_match.group(1), "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}
                     
-                    # البحث عن السعر الحقيقي (مثال: 350,00 € أو 320,00 €)
                     price_match = re.search(r'(\d+[\.,]\d{2}\s*€)', line)
                     if price_match and current_flight:
                         current_flight["price"] = price_match.group(1).replace(',', '.')
@@ -54,7 +47,7 @@ def scrape_sundair():
                     extracted_data[route_id].append(current_flight)
 
             except Exception as e:
-                print(f"خطأ أثناء جلب مسار {route_id}: {e}")
+                print(f"خطأ أثناء جلب {route_id}: {e}")
 
         browser.close()
 
@@ -69,7 +62,7 @@ def build_interactive_html(data):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>متابع أسعار Sundair الحية</title>
+    <title>أسعار Sundair الحية</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; padding: 15px; color: #333; }}
         .card {{ background: white; padding: 20px; border-radius: 14px; max-width: 650px; margin: auto; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }}
@@ -77,7 +70,7 @@ def build_interactive_html(data):
         .filter-box {{ background: #f8f9fa; padding: 15px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #e9ecef; }}
         .form-group {{ margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px; }}
         label {{ font-weight: bold; font-size: 0.9em; }}
-        select, input {{ padding: 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; }}
+        select, input {{ padding: 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; background: white; }}
         .row {{ display: flex; gap: 10px; }}
         .row .form-group {{ flex: 1; }}
         table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
@@ -130,23 +123,28 @@ def build_interactive_html(data):
     <script>
         const allData = {json_data};
 
-        function parseGermanDate(dateStr) {{
+        function parseGermanDateStr(dateStr) {{
             const parts = dateStr.split('.');
-            return new Date(parts[2], parts[1] - 1, parts[0]);
+            return `${{parts[2]}}-${{parts[1]}}-${{parts[0]}}`; // تحويل إلى YYYY-MM-DD
         }}
 
-        function getDayName(dateObj) {{
+        function getDayName(dateStr) {{
+            const parts = dateStr.split('.');
+            const d = new Date(parts[2], parts[1] - 1, parts[0]);
             const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-            return days[dateObj.getDay()];
+            return days[d.getDay()];
+        }}
+
+        function getDayNum(dateStr) {{
+            const parts = dateStr.split('.');
+            const d = new Date(parts[2], parts[1] - 1, parts[0]);
+            return d.getDay();
         }}
 
         function filterFlights() {{
             const route = document.getElementById('routeSelect').value;
             const startVal = document.getElementById('startDate').value;
             const endVal = document.getElementById('endDate').value;
-            
-            const startDate = startVal ? new Date(startVal) : null;
-            const endDate = endVal ? new Date(endVal) : null;
 
             const tbody = document.getElementById('flightsTable');
             tbody.innerHTML = '';
@@ -154,20 +152,18 @@ def build_interactive_html(data):
             const flights = allData[route] || [];
 
             flights.forEach(item => {{
-                const itemDate = parseGermanDate(item.date);
-                
-                // تصفية حسب التاريخ والأيام (الثلاثاء والسبت فقط)
-                const dayNum = itemDate.getDay();
+                const isoDate = parseGermanDateStr(item.date);
+                const dayNum = getDayNum(item.date);
                 const isTueOrSat = (dayNum === 2 || dayNum === 6);
-                
+
                 let inRange = true;
-                if (startDate && itemDate < startDate) inRange = false;
-                if (endDate && itemDate > endDate) inRange = false;
+                if (startVal && isoDate < startVal) inRange = false;
+                if (endVal && isoDate > endVal) inRange = false;
 
                 if (isTueOrSat && inRange) {{
                     const isAvail = item.price !== 'غير متوفر';
                     const priceClass = isAvail ? 'price-available' : 'price-unavailable';
-                    const dayName = getDayName(itemDate);
+                    const dayName = getDayName(item.date);
 
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
