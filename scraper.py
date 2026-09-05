@@ -16,14 +16,9 @@ def scrape_sundair():
 
     try:
         with sync_playwright() as p:
-            # تشغيل المتصفح بوضع الحماية لمنع الحظر والانهيار
             browser = p.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-blink-features=AutomationControlled"
-                ]
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
             )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -33,26 +28,47 @@ def scrape_sundair():
 
             for route in routes:
                 route_id = route["id"]
+                print(f"جاري جلب رحلات المسار: {route_id}")
                 try:
-                    print(f"جاري معالجة المسار: {route_id}")
-                    # تحميل الصفحة بشرط تخفيف الانتظار لتجنب الـ Timeout
-                    page.goto("https://www.sundair.com/booking/#/", wait_until="domcontentloaded", timeout=40000)
+                    # فتح موقع الحجز والانتظار حتى اكتمال التحميل
+                    page.goto("https://www.sundair.com/booking/#/", wait_until="networkidle", timeout=60000)
                     page.wait_for_timeout(3000)
 
-                    # معالجة موافقة الكوكيز بأمان
-                    try:
-                        for selector in ["button:has-text('Akzeptieren')", "button:has-text('Accept')", ".cookie-btn"]:
+                    # 1. إغلاق نافذة الكوكيز
+                    for selector in ["button:has-text('Akzeptieren')", "button:has-text('Accept')", ".cookie-btn", "#ez-accept-all"]:
+                        try:
                             btn = page.query_selector(selector)
                             if btn and btn.is_visible():
                                 btn.click()
                                 page.wait_for_timeout(1000)
                                 break
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
 
-                    page.wait_for_timeout(3000)
+                    # 2. إدخال المطارات والضغط على زر البحث
+                    try:
+                        from_field = page.query_selector("input[placeholder*='Von'], input[placeholder*='From'], .origin-input input")
+                        if from_field:
+                            from_field.click()
+                            from_field.fill(route["from"])
+                            page.wait_for_timeout(1000)
+                            page.keyboard.press("Enter")
 
-                    # قراءة محتوى الصفحة
+                        to_field = page.query_selector("input[placeholder*='Nach'], input[placeholder*='To'], .destination-input input")
+                        if to_field:
+                            to_field.click()
+                            to_field.fill(route["to"])
+                            page.wait_for_timeout(1000)
+                            page.keyboard.press("Enter")
+
+                        search_btn = page.query_selector("button:has-text('Suchen'), button:has-text('Search'), button[type='submit']")
+                        if search_btn:
+                            search_btn.click()
+                            page.wait_for_timeout(6000)
+                    except Exception as form_err:
+                        print(f"ملاحظة في النموذج: {form_err}")
+
+                    # 3. قراءة البيانات المستخرجة
                     page_text = page.evaluate("() => document.body.innerText")
                     lines = page_text.split('\n')
                     
@@ -83,14 +99,15 @@ def scrape_sundair():
                     if current_flight and "date" in current_flight:
                         extracted_data[route_id].append(current_flight)
 
+                    print(f"تم العثور على {len(extracted_data[route_id])} رحلة لـ {route_id}")
+
                 except Exception as route_err:
-                    print(f"تنبيه: تعذر إكمال جلب المسار {route_id}: {route_err}")
+                    print(f"خطأ في المسار {route_id}: {route_err}")
 
             browser.close()
     except Exception as sys_err:
-        print(f"خطأ في تشغيل المحاكي: {sys_err}")
+        print(f"خطأ نظام: {sys_err}")
 
-    # التعديل الرئيسي: بناء الملف دائماً حتى لو فشل جلب بعض البيانات لمنع انهيار الـ Workflow
     build_interactive_html(extracted_data, today, six_months_later)
 
 def build_interactive_html(data, start_date, end_date):
@@ -173,7 +190,7 @@ def build_interactive_html(data, start_date, end_date):
             const flights = allData[route] || [];
 
             if (flights.length === 0) {{
-                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات معروضة حالياً أو جاري إعادة المحاولة.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات مجدولة حالياً لهذا الاتجاه.</td></tr>';
                 return;
             }}
 
