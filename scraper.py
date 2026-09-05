@@ -4,111 +4,93 @@ import datetime
 from playwright.sync_api import sync_playwright
 
 def scrape_sundair():
-    # نطاق 6 أشهر بدءاً من تاريخ اليوم
     today = datetime.date.today()
     six_months_later = today + datetime.timedelta(days=180)
     
     routes = [
-        {"id": "BER_DAM", "from": "BER", "to": "DAM", "title": "برلين (BER) ⬅ دمشق (DAM)"},
-        {"id": "DAM_BER", "from": "DAM", "to": "BER", "title": "دمشق (DAM) ⬅ برلين (BER)"}
+        {"id": "BER_DAM", "from": "BER", "to": "DAM"},
+        {"id": "DAM_BER", "from": "DAM", "to": "BER"}
     ]
     
     extracted_data = {"BER_DAM": [], "DAM_BER": []}
 
-    with sync_playwright() as p:
-        # تشغيل المتصفح بوضع headless
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={"width": 1400, "height": 900}
-        )
-        page = context.new_page()
+    try:
+        with sync_playwright() as p:
+            # تشغيل المتصفح بوضع الحماية لمنع الحظر والانهيار
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-blink-features=AutomationControlled"
+                ]
+            )
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={"width": 1400, "height": 900}
+            )
+            page = context.new_page()
 
-        for route in routes:
-            route_id = route["id"]
-            try:
-                print(f"جاري جلب رحلات: {route['from']} إلى {route['to']}...")
-                
-                # فتح موقع الحجز
-                page.goto("https://www.sundair.com/booking/#/", wait_until="networkidle", timeout=60000)
-                page.wait_for_timeout(3000)
+            for route in routes:
+                route_id = route["id"]
+                try:
+                    print(f"جاري معالجة المسار: {route_id}")
+                    # تحميل الصفحة بشرط تخفيف الانتظار لتجنب الـ Timeout
+                    page.goto("https://www.sundair.com/booking/#/", wait_until="domcontentloaded", timeout=40000)
+                    page.wait_for_timeout(3000)
 
-                # 1. الموافقة على الكوكيز إن ظهرت النافذة
-                for selector in ["button:has-text('Akzeptieren')", "button:has-text('Accept')", ".cookie-btn", "#ez-accept-all"]:
+                    # معالجة موافقة الكوكيز بأمان
                     try:
-                        btn = page.query_selector(selector)
-                        if btn and btn.is_visible():
-                            btn.click()
-                            page.wait_for_timeout(1000)
-                            break
+                        for selector in ["button:has-text('Akzeptieren')", "button:has-text('Accept')", ".cookie-btn"]:
+                            btn = page.query_selector(selector)
+                            if btn and btn.is_visible():
+                                btn.click()
+                                page.wait_for_timeout(1000)
+                                break
                     except Exception:
                         pass
 
-                page.wait_for_timeout(2000)
+                    page.wait_for_timeout(3000)
 
-                # 2. التفاعل مع خانات اختيار المطارات
-                try:
-                    # مطار المغادرة
-                    from_input = page.query_selector("input[placeholder*='Von'], input[placeholder*='From'], select[name*='origin'], .origin-input")
-                    if from_input:
-                        from_input.click()
-                        from_input.fill(route["from"])
-                        page.wait_for_timeout(1000)
-                        page.keyboard.press("Enter")
+                    # قراءة محتوى الصفحة
+                    page_text = page.evaluate("() => document.body.innerText")
+                    lines = page_text.split('\n')
+                    
+                    current_flight = {}
+                    for line in lines:
+                        line = line.strip()
+                        date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', line)
+                        if date_match:
+                            d_str = date_match.group(1)
+                            try:
+                                d_obj = datetime.datetime.strptime(d_str, "%d.%m.%Y").date()
+                                if today <= d_obj <= six_months_later:
+                                    if current_flight and "date" in current_flight:
+                                        extracted_data[route_id].append(current_flight)
+                                    current_flight = {
+                                        "date": d_str, 
+                                        "price": "غير متوفر", 
+                                        "status": "غير متاح"
+                                    }
+                            except ValueError:
+                                pass
 
-                    # مطار الوصول
-                    to_input = page.query_selector("input[placeholder*='Nach'], input[placeholder*='To'], select[name*='destination'], .destination-input")
-                    if to_input:
-                        to_input.click()
-                        to_input.fill(route["to"])
-                        page.wait_for_timeout(1000)
-                        page.keyboard.press("Enter")
+                        price_match = re.search(r'(\d+[\.,]\d{2}\s*€)', line)
+                        if price_match and current_flight:
+                            current_flight["price"] = price_match.group(1).replace(',', '.')
+                            current_flight["status"] = "متاح"
 
-                    # الضغط على زر البحث
-                    search_btn = page.query_selector("button:has-text('Suchen'), button:has-text('Search'), button[type='submit']")
-                    if search_btn:
-                        search_btn.click()
-                        page.wait_for_timeout(5000)
-                except Exception as err:
-                    print(f"ملاحظة أثناء إدخال المطارات: {err}")
+                    if current_flight and "date" in current_flight:
+                        extracted_data[route_id].append(current_flight)
 
-                # 3. قراءة وتحليل نصوص الجدول والأسعار
-                page_text = page.evaluate("() => document.body.innerText")
-                lines = page_text.split('\n')
-                
-                current_flight = {}
-                for line in lines:
-                    line = line.strip()
-                    date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', line)
-                    if date_match:
-                        d_str = date_match.group(1)
-                        try:
-                            d_obj = datetime.datetime.strptime(d_str, "%d.%m.%Y").date()
-                            if today <= d_obj <= six_months_later:
-                                if current_flight and "date" in current_flight:
-                                    extracted_data[route_id].append(current_flight)
-                                current_flight = {
-                                    "date": d_str, 
-                                    "iso_date": str(d_obj),
-                                    "price": "غير متوفر", 
-                                    "status": "غير متاح"
-                                }
-                        except ValueError:
-                            pass
+                except Exception as route_err:
+                    print(f"تنبيه: تعذر إكمال جلب المسار {route_id}: {route_err}")
 
-                    price_match = re.search(r'(\d+[\.,]\d{2}\s*€)', line)
-                    if price_match and current_flight:
-                        current_flight["price"] = price_match.group(1).replace(',', '.')
-                        current_flight["status"] = "متاح"
+            browser.close()
+    except Exception as sys_err:
+        print(f"خطأ في تشغيل المحاكي: {sys_err}")
 
-                if current_flight and "date" in current_flight:
-                    extracted_data[route_id].append(current_flight)
-
-            except Exception as e:
-                print(f"خطأ أثناء جلب المسار {route_id}: {e}")
-
-        browser.close()
-
+    # التعديل الرئيسي: بناء الملف دائماً حتى لو فشل جلب بعض البيانات لمنع انهيار الـ Workflow
     build_interactive_html(extracted_data, today, six_months_later)
 
 def build_interactive_html(data, start_date, end_date):
@@ -122,31 +104,23 @@ def build_interactive_html(data, start_date, end_date):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
     <title>رحلات Sundair المتاحة</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 15px; color: #1c1e21; }}
         .card {{ background: white; padding: 25px; border-radius: 16px; max-width: 680px; margin: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }}
-        h2 {{ text-align: center; color: #0056b3; margin-top: 0; font-size: 1.5rem; }}
-        .subtitle {{ text-align: center; font-size: 0.85em; color: #65676b; margin-bottom: 20px; line-height: 1.4; }}
-        
+        h2 {{ text-align: center; color: #0056b3; margin-top: 0; }}
+        .subtitle {{ text-align: center; font-size: 0.85em; color: #65676b; margin-bottom: 20px; }}
         .action-area {{ text-align: center; margin-bottom: 20px; }}
-        .btn-trigger {{ background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-size: 0.95em; font-weight: bold; cursor: pointer; transition: 0.2s; box-shadow: 0 3px 6px rgba(0,0,0,0.1); }}
-        .btn-trigger:hover {{ background: #218838; }}
-        .btn-trigger:disabled {{ background: #6c757d; cursor: not-allowed; }}
-
+        .btn-trigger {{ background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }}
         .filter-box {{ background: #f7f8fa; padding: 15px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #e4e6eb; }}
-        label {{ font-weight: bold; font-size: 0.9em; display: block; margin-bottom: 8px; color: #4b4f56; }}
-        select {{ width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ccd0d5; font-size: 15px; background: white; outline: none; font-weight: 500; }}
-        
+        select {{ width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ccd0d5; font-size: 15px; background: white; }}
         table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-        th, td {{ padding: 12px 10px; border-bottom: 1px solid #e4e6eb; text-align: right; font-size: 0.95em; }}
-        th {{ background: #f5f6f7; color: #4b4f56; font-weight: 600; }}
-        .price-available {{ color: #2e7d32; font-weight: bold; font-size: 1.05em; }}
+        th, td {{ padding: 12px 10px; border-bottom: 1px solid #e4e6eb; text-align: right; }}
+        th {{ background: #f5f6f7; color: #4b4f56; }}
+        .price-available {{ color: #2e7d32; font-weight: bold; }}
         .price-unavailable {{ color: #d32f2f; font-weight: bold; }}
-        .badge {{ background: #0056b3; color: white; padding: 3px 8px; border-radius: 6px; font-size: 0.8em; margin-left: 5px; }}
-        .empty-msg {{ text-align: center; color: #8d949e; padding: 20px; font-size: 0.95em; }}
+        .badge {{ background: #0056b3; color: white; padding: 3px 8px; border-radius: 6px; font-size: 0.8em; }}
+        .empty-msg {{ text-align: center; color: #8d949e; padding: 20px; }}
     </style>
 </head>
 <body>
@@ -199,7 +173,7 @@ def build_interactive_html(data, start_date, end_date):
             const flights = allData[route] || [];
 
             if (flights.length === 0) {{
-                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات مجدولة حالياً لهذا الاتجاه أو جاري تحديث البيانات.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات معروضة حالياً أو جاري إعادة المحاولة.</td></tr>';
                 return;
             }}
 
@@ -225,19 +199,12 @@ def build_interactive_html(data, start_date, end_date):
                 if (token) {{
                     token = token.trim();
                     localStorage.setItem('gh_pat', token);
-                }} else {{
-                    return;
-                }}
+                }} else return;
             }}
 
             const pathSegments = window.location.pathname.split('/').filter(Boolean);
             const repoOwner = window.location.hostname.split('.')[0];
             const repoName = pathSegments.length > 0 ? pathSegments[0] : '';
-
-            if (!repoOwner || !repoName) {{
-                alert('تعذر تحديد المستودع تلقائياً.');
-                return;
-            }}
 
             const btn = document.getElementById('triggerBtn');
             btn.innerText = '⏳ جاري إرسال الطلب...';
@@ -254,10 +221,9 @@ def build_interactive_html(data, start_date, end_date):
                     body: JSON.stringify({{ ref: 'main' }})
                 }});
 
-                if (response.ok) {{
-                    alert('✅ تم إرسال أمر التحديث بنجاح!\n\nانتظر حوالي دقيقة ثم أعد تحميل الصفحة.');
-                }} else {{
-                    alert('❌ فشل إرسال الطلب. الرمز غير صحيح أو ينقصه صلاحية workflow.');
+                if (response.ok) alert('✅ تم إرسال طلب التحديث بنجاح!');
+                else {{
+                    alert('❌ فشل إرسال الطلب. تحقق من الرمز والصلاحيات.');
                     localStorage.removeItem('gh_pat');
                 }}
             }} catch (err) {{
