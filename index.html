@@ -4,31 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
     <title>رحلات Sundair المتاحة</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 15px; color: #1c1e21; }
         .card { background: white; padding: 25px; border-radius: 16px; max-width: 680px; margin: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
-        h2 { text-align: center; color: #0056b3; margin-top: 0; font-size: 1.5rem; }
-        .subtitle { text-align: center; font-size: 0.85em; color: #65676b; margin-bottom: 20px; line-height: 1.4; }
-        
+        h2 { text-align: center; color: #0056b3; margin-top: 0; }
+        .subtitle { text-align: center; font-size: 0.85em; color: #65676b; margin-bottom: 20px; }
         .action-area { text-align: center; margin-bottom: 20px; }
-        .btn-trigger { background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-size: 0.95em; font-weight: bold; cursor: pointer; transition: 0.2s; box-shadow: 0 3px 6px rgba(0,0,0,0.1); }
-        .btn-trigger:hover { background: #218838; }
-        .btn-trigger:disabled { background: #6c757d; cursor: not-allowed; }
-
+        .btn-trigger { background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; }
         .filter-box { background: #f7f8fa; padding: 15px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #e4e6eb; }
-        label { font-weight: bold; font-size: 0.9em; display: block; margin-bottom: 8px; color: #4b4f56; }
-        select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ccd0d5; font-size: 15px; background: white; outline: none; font-weight: 500; }
-        
+        select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ccd0d5; font-size: 15px; background: white; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { padding: 12px 10px; border-bottom: 1px solid #e4e6eb; text-align: right; font-size: 0.95em; }
-        th { background: #f5f6f7; color: #4b4f56; font-weight: 600; }
-        .price-available { color: #2e7d32; font-weight: bold; font-size: 1.05em; }
+        th, td { padding: 12px 10px; border-bottom: 1px solid #e4e6eb; text-align: right; }
+        th { background: #f5f6f7; color: #4b4f56; }
+        .price-available { color: #2e7d32; font-weight: bold; }
         .price-unavailable { color: #d32f2f; font-weight: bold; }
-        .badge { background: #0056b3; color: white; padding: 3px 8px; border-radius: 6px; font-size: 0.8em; margin-left: 5px; }
-        .empty-msg { text-align: center; color: #8d949e; padding: 20px; font-size: 0.95em; }
+        .badge { background: #0056b3; color: white; padding: 3px 8px; border-radius: 6px; font-size: 0.8em; }
+        .empty-msg { text-align: center; color: #8d949e; padding: 20px; }
     </style>
 </head>
 <body>
@@ -36,7 +28,7 @@
         <h2>✈️ جدول رحلات Sundair (6 أشهر)</h2>
         <div class="subtitle">
             الفترة المغطاة: <strong>من 05.09.2026 حتى 04.03.2027</strong><br>
-            آخر تحديث آلي: 2026-09-05 09:31
+            آخر تحديث آلي: 2026-09-05 09:41
         </div>
 
         <div class="action-area">
@@ -81,7 +73,7 @@
             const flights = allData[route] || [];
 
             if (flights.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات مجدولة حالياً لهذا الاتجاه.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات معروضة حالياً أو جاري إعادة المحاولة.</td></tr>';
                 return;
             }
 
@@ -103,23 +95,16 @@
         async function triggerGitHubWorkflow() {
             let token = localStorage.getItem('gh_pat');
             if (!token) {
-                token = prompt('يرجى إدخال GitHub Personal Access Token (تُطلب للمرة الأولى فقط):');
+                token = prompt('يرجى إدخال GitHub Personal Access Token:');
                 if (token) {
                     token = token.trim();
                     localStorage.setItem('gh_pat', token);
-                } else {
-                    return;
-                }
+                } else return;
             }
 
             const pathSegments = window.location.pathname.split('/').filter(Boolean);
             const repoOwner = window.location.hostname.split('.')[0];
             const repoName = pathSegments.length > 0 ? pathSegments[0] : '';
-
-            if (!repoOwner || !repoName) {
-                alert('تعذر تحديد المستودع تلقائياً. تأكد من أن الموقع يعمل عبر GitHub Pages.');
-                return;
-            }
 
             const btn = document.getElementById('triggerBtn');
             btn.innerText = '⏳ جاري إرسال الطلب...';
@@ -136,16 +121,13 @@
                     body: JSON.stringify({ ref: 'main' })
                 });
 
-                if (response.ok) {
-                    alert('✅ تم إرسال أمر التحديث بنجاح!
-
-تستغرق العملية حوالي دقيقة. أعد تحميل الصفحة بعد دقيقة لمشاهدة الأسعار الجديدة.');
-                } else {
-                    alert('❌ فشل إرسال الطلب. الرمز (Token) غير صحيح أو لا يملك صلاحيات. يرجى إدخاله مجدداً.');
+                if (response.ok) alert('✅ تم إرسال طلب التحديث بنجاح!');
+                else {
+                    alert('❌ فشل إرسال الطلب. تحقق من الرمز والصلاحيات.');
                     localStorage.removeItem('gh_pat');
                 }
             } catch (err) {
-                alert('❌ حدث خطأ أثناء الاتصال بالخادم.');
+                alert('❌ حدث خطأ في الاتصال.');
             } finally {
                 btn.innerText = '🔄 تحديث الأسعار فوراً';
                 btn.disabled = false;
