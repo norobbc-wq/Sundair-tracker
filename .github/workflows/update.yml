@@ -2,11 +2,11 @@ name: Auto Update Flights
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # تشغيل تلقائي كل 6 ساعات
-  workflow_dispatch: # أساسي لكي يعمل زر التحديث والتشغيل اليدوي
+    - cron: '0 */6 * * *' # التحديث الآلي كل 6 ساعات (يمكن تغييرها إلى '0 * * * *' لكل ساعة)
+  workflow_dispatch:
 
 permissions:
-  contents: write # إذن كتابة وتحديث الملفات داخل المستودع
+  contents: write
 
 jobs:
   scrape:
@@ -25,9 +25,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install playwright
-
-      - name: Install Playwright Browsers
-        run: |
           npx playwright install --with-deps chromium
 
       - name: Run Scraper Script
