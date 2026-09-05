@@ -4,7 +4,7 @@ import datetime
 from playwright.sync_api import sync_playwright
 
 def scrape_sundair():
-    # تحديد نطاق 6 أشهر بدءاً من تاريخ اليوم تلقائياً
+    # نطاق 6 أشهر بدءاً من تاريخ اليوم
     today = datetime.date.today()
     six_months_later = today + datetime.timedelta(days=180)
     
@@ -16,6 +16,7 @@ def scrape_sundair():
     extracted_data = {"BER_DAM": [], "DAM_BER": []}
 
     with sync_playwright() as p:
+        # تشغيل المتصفح بوضع headless
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -26,22 +27,52 @@ def scrape_sundair():
         for route in routes:
             route_id = route["id"]
             try:
+                print(f"جاري جلب رحلات: {route['from']} إلى {route['to']}...")
+                
                 # فتح موقع الحجز
                 page.goto("https://www.sundair.com/booking/#/", wait_until="networkidle", timeout=60000)
                 page.wait_for_timeout(3000)
 
-                # النقر على الموافقة على الكوكيز إن ظهرت
+                # 1. الموافقة على الكوكيز إن ظهرت النافذة
+                for selector in ["button:has-text('Akzeptieren')", "button:has-text('Accept')", ".cookie-btn", "#ez-accept-all"]:
+                    try:
+                        btn = page.query_selector(selector)
+                        if btn and btn.is_visible():
+                            btn.click()
+                            page.wait_for_timeout(1000)
+                            break
+                    except Exception:
+                        pass
+
+                page.wait_for_timeout(2000)
+
+                # 2. التفاعل مع خانات اختيار المطارات
                 try:
-                    cookie_btn = page.query_selector("button:has-text('Akzeptieren'), button:has-text('Accept'), .cookie-btn")
-                    if cookie_btn:
-                        cookie_btn.click()
+                    # مطار المغادرة
+                    from_input = page.query_selector("input[placeholder*='Von'], input[placeholder*='From'], select[name*='origin'], .origin-input")
+                    if from_input:
+                        from_input.click()
+                        from_input.fill(route["from"])
                         page.wait_for_timeout(1000)
-                except Exception:
-                    pass
+                        page.keyboard.press("Enter")
 
-                page.wait_for_timeout(4000)
+                    # مطار الوصول
+                    to_input = page.query_selector("input[placeholder*='Nach'], input[placeholder*='To'], select[name*='destination'], .destination-input")
+                    if to_input:
+                        to_input.click()
+                        to_input.fill(route["to"])
+                        page.wait_for_timeout(1000)
+                        page.keyboard.press("Enter")
 
-                # قراءة النصوص المعروضة في الموقع
+                    # الضغط على زر البحث
+                    search_btn = page.query_selector("button:has-text('Suchen'), button:has-text('Search'), button[type='submit']")
+                    if search_btn:
+                        search_btn.click()
+                        page.wait_for_timeout(5000)
+                except Exception as err:
+                    print(f"ملاحظة أثناء إدخال المطارات: {err}")
+
+                # 3. قراءة وتحليل نصوص الجدول والأسعار
                 page_text = page.evaluate("() => document.body.innerText")
                 lines = page_text.split('\n')
                 
@@ -60,7 +91,7 @@ def scrape_sundair():
                                     "date": d_str, 
                                     "iso_date": str(d_obj),
                                     "price": "غير متوفر", 
-                                    "status": "NICHT VERFÜGBAR"
+                                    "status": "غير متاح"
                                 }
                         except ValueError:
                             pass
@@ -168,7 +199,7 @@ def build_interactive_html(data, start_date, end_date):
             const flights = allData[route] || [];
 
             if (flights.length === 0) {{
-                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات مجدولة حالياً لهذا الاتجاه.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="3" class="empty-msg">لا توجد رحلات مجدولة حالياً لهذا الاتجاه أو جاري تحديث البيانات.</td></tr>';
                 return;
             }}
 
@@ -190,7 +221,7 @@ def build_interactive_html(data, start_date, end_date):
         async function triggerGitHubWorkflow() {{
             let token = localStorage.getItem('gh_pat');
             if (!token) {{
-                token = prompt('يرجى إدخال GitHub Personal Access Token (تُطلب للمرة الأولى فقط):');
+                token = prompt('يرجى إدخال GitHub Personal Access Token:');
                 if (token) {{
                     token = token.trim();
                     localStorage.setItem('gh_pat', token);
@@ -204,7 +235,7 @@ def build_interactive_html(data, start_date, end_date):
             const repoName = pathSegments.length > 0 ? pathSegments[0] : '';
 
             if (!repoOwner || !repoName) {{
-                alert('تعذر تحديد المستودع تلقائياً. تأكد من أن الموقع يعمل عبر GitHub Pages.');
+                alert('تعذر تحديد المستودع تلقائياً.');
                 return;
             }}
 
@@ -224,13 +255,13 @@ def build_interactive_html(data, start_date, end_date):
                 }});
 
                 if (response.ok) {{
-                    alert('✅ تم إرسال أمر التحديث بنجاح!\n\nتستغرق العملية حوالي دقيقة. أعد تحميل الصفحة بعد دقيقة لمشاهدة الأسعار الجديدة.');
+                    alert('✅ تم إرسال أمر التحديث بنجاح!\n\nانتظر حوالي دقيقة ثم أعد تحميل الصفحة.');
                 }} else {{
-                    alert('❌ فشل إرسال الطلب. الرمز (Token) غير صحيح أو لا يملك صلاحيات. يرجى إدخاله مجدداً.');
+                    alert('❌ فشل إرسال الطلب. الرمز غير صحيح أو ينقصه صلاحية workflow.');
                     localStorage.removeItem('gh_pat');
                 }}
             }} catch (err) {{
-                alert('❌ حدث خطأ أثناء الاتصال بالخادم.');
+                alert('❌ حدث خطأ في الاتصال.');
             }} finally {{
                 btn.innerText = '🔄 تحديث الأسعار فوراً';
                 btn.disabled = false;
