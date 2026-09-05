@@ -2,8 +2,8 @@ name: Update Sundair Prices
 
 on:
   schedule:
-    - cron: '0 */12 * * *' # يعمل تلقائياً كل 12 ساعة
-  workflow_dispatch: # يتيح لك التشغيل اليدوي بضغطة زر
+    - cron: '0 * * * *' # يعمل تلقائياً رأس كل ساعة
+  workflow_dispatch:يتيح لك التشغيل اليدوي بضغطة زر
 
 jobs:
   build:
