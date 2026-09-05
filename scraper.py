@@ -1,85 +1,194 @@
+import json
+import re
 import datetime
 from playwright.sync_api import sync_playwright
 
-def generate_dates(start_date, end_date):
-    dates = []
-    curr = start_date
-    while curr <= end_date:
-        if curr.weekday() in [1, 5]:  # 1 = الثلاثاء, 5 = السبت
-            dates.append(curr)
-        curr += datetime.timedelta(days=1)
-    return dates
-
 def scrape_sundair():
-    start = datetime.date(2026, 9, 6)
-    end = datetime.date(2026, 12, 31)
-    flight_dates = generate_dates(start, end)
+    routes = [
+        {"id": "BER_DAM", "from": "BER", "to": "DAM", "name": "برلين (BER) ⬅ دمشق (DAM)"},
+        {"id": "DAM_BER", "from": "DAM", "to": "BER", "name": "دمشق (DAM) ⬅ برلين (BER)"}
+    ]
     
-    results = []
+    extracted_data = {}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        
-        # فتح موقع الحجز وتخطي الجلسة
-        page.goto("https://www.sundair.com/booking/#/", wait_until="networkidle")
-        
-        for f_date in flight_dates:
-            date_str = f_date.strftime("%d.%m.%Y")
-            # محاكاة الاستعلام للذهاب والعودة أو جلب السعر المباشر
-            # يضيف السكربت النتيجة إلى القائمة
-            results.append({
-                "date": date_str,
-                "day": "الثلاثاء" if f_date.weekday() == 1 else "السبت",
-                "price": "300.00 €" if f_date.day > 15 else "غير متوفر", # مثال بناء البيانات
-                "status": "متاح" if f_date.day > 15 else "NICHT VERFÜGBAR"
-            })
-        browser.close()
-    
-    build_html(results)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
 
-def build_html(data):
+        for route in routes:
+            route_id = route["id"]
+            extracted_data[route_id] = []
+            
+            try:
+                # الانتقال لموقع الحجز
+                page.goto("https://www.sundair.com/booking/#/", wait_until="networkidle", timeout=60000)
+                page.wait_for_timeout(4000)
+
+                # استخراج نصوص كروت الرحلات المعروضة في الصفحة
+                flight_cards = page.query_selector_all("div[class*='flight'], div[class*='booking'], .flight-item")
+                
+                # جلب محتوى الصفحة لتقسيم الرحلات
+                page_text = page.evaluate("() => document.body.innerText")
+                lines = page_text.split('\n')
+                
+                current_flight = {}
+                for line in lines:
+                    line = line.strip()
+                    # البحث عن التاريخ (مثال: 26.09.2026)
+                    date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', line)
+                    if date_match:
+                        if current_flight and "date" in current_flight:
+                            extracted_data[route_id].append(current_flight)
+                        current_flight = {"date": date_match.group(1), "price": "غير متوفر", "status": "NICHT VERFÜGBAR"}
+                    
+                    # البحث عن السعر الحقيقي (مثال: 350,00 € أو 320,00 €)
+                    price_match = re.search(r'(\d+[\.,]\d{2}\s*€)', line)
+                    if price_match and current_flight:
+                        current_flight["price"] = price_match.group(1).replace(',', '.')
+                        current_flight["status"] = "متاح"
+
+                if current_flight and "date" in current_flight:
+                    extracted_data[route_id].append(current_flight)
+
+            except Exception as e:
+                print(f"خطأ أثناء جلب مسار {route_id}: {e}")
+
+        browser.close()
+
+    build_interactive_html(extracted_data)
+
+def build_interactive_html(data):
+    json_data = json.dumps(data, ensure_ascii=False)
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    rows = ""
-    for item in data:
-        color = "#28a745" if "€" in item["price"] else "#dc3545"
-        rows += f"""
-        <tr>
-            <td><b>{item['day']}</b> {item['date']}</td>
-            <td><span style="color: {color}; font-weight: bold;">{item['price']}</span></td>
-            <td>{item['status']}</td>
-        </tr>
-        """
-    
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="ar" dir="rtl">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>أسعار Sundair الحية</title>
-        <style>
-            body {{ font-family: system-ui, sans-serif; padding: 15px; background: #f4f6f9; }}
-            .card {{ background: white; padding: 20px; border-radius: 12px; max-width: 600px; margin: auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
-            th, td {{ padding: 10px; border-bottom: 1px solid #eee; text-align: right; }}
-            .updated {{ font-size: 0.8em; color: #666; text-align: center; }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h2 style="text-align:center; color:#0056b3;">جدول أسعار Sundair الحية</h2>
-            <p class="updated">آخر تحديث تلقائي: {now}</p>
-            <table>
-                <thead>
-                    <tr><th>التاريخ</th><th>السعر</th><th>الحالة</th></tr>
-                </thead>
-                <tbody>{rows}</tbody>
-            </table>
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>متابع أسعار Sundair الحية</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; padding: 15px; color: #333; }}
+        .card {{ background: white; padding: 20px; border-radius: 14px; max-width: 650px; margin: auto; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }}
+        h2 {{ text-align: center; color: #0056b3; margin-top: 0; }}
+        .filter-box {{ background: #f8f9fa; padding: 15px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #e9ecef; }}
+        .form-group {{ margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px; }}
+        label {{ font-weight: bold; font-size: 0.9em; }}
+        select, input {{ padding: 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; }}
+        .row {{ display: flex; gap: 10px; }}
+        .row .form-group {{ flex: 1; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+        th, td {{ padding: 12px 10px; border-bottom: 1px solid #eee; text-align: right; font-size: 0.95em; }}
+        th {{ background: #e9ecef; color: #495057; }}
+        .price-available {{ color: #28a745; font-weight: bold; }}
+        .price-unavailable {{ color: #dc3545; font-weight: bold; }}
+        .badge {{ background: #0056b3; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }}
+        .updated {{ font-size: 0.8em; color: #666; text-align: center; margin-bottom: 15px; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>📊 أسعار Sundair الحية</h2>
+        <div class="updated">آخر تحديث حقيقي: {now}</div>
+
+        <div class="filter-box">
+            <div class="form-group">
+                <label>اتجاه الرحلة (تغيير الوجهة):</label>
+                <select id="routeSelect" onchange="filterFlights()">
+                    <option value="BER_DAM">برلين (BER) ⬅ دمشق (DAM)</option>
+                    <option value="DAM_BER">دمشق (DAM) ⬅ برلين (BER)</option>
+                </select>
+            </div>
+            
+            <div class="row">
+                <div class="form-group">
+                    <label>من تاريخ:</label>
+                    <input type="date" id="startDate" value="2026-09-06" onchange="filterFlights()">
+                </div>
+                <div class="form-group">
+                    <label>إلى تاريخ:</label>
+                    <input type="date" id="endDate" value="2026-12-31" onchange="filterFlights()">
+                </div>
+            </div>
         </div>
-    </body>
-    </html>
-    """
+
+        <table>
+            <thead>
+                <tr>
+                    <th>اليوم والتاريخ</th>
+                    <th>السعر الحقيقي</th>
+                    <th>الحالة</th>
+                </tr>
+            </thead>
+            <tbody id="flightsTable"></tbody>
+        </table>
+    </div>
+
+    <script>
+        const allData = {json_data};
+
+        function parseGermanDate(dateStr) {{
+            const parts = dateStr.split('.');
+            return new Date(parts[2], parts[1] - 1, parts[0]);
+        }}
+
+        function getDayName(dateObj) {{
+            const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+            return days[dateObj.getDay()];
+        }}
+
+        function filterFlights() {{
+            const route = document.getElementById('routeSelect').value;
+            const startVal = document.getElementById('startDate').value;
+            const endVal = document.getElementById('endDate').value;
+            
+            const startDate = startVal ? new Date(startVal) : null;
+            const endDate = endVal ? new Date(endVal) : null;
+
+            const tbody = document.getElementById('flightsTable');
+            tbody.innerHTML = '';
+
+            const flights = allData[route] || [];
+
+            flights.forEach(item => {{
+                const itemDate = parseGermanDate(item.date);
+                
+                // تصفية حسب التاريخ والأيام (الثلاثاء والسبت فقط)
+                const dayNum = itemDate.getDay();
+                const isTueOrSat = (dayNum === 2 || dayNum === 6);
+                
+                let inRange = true;
+                if (startDate && itemDate < startDate) inRange = false;
+                if (endDate && itemDate > endDate) inRange = false;
+
+                if (isTueOrSat && inRange) {{
+                    const isAvail = item.price !== 'غير متوفر';
+                    const priceClass = isAvail ? 'price-available' : 'price-unavailable';
+                    const dayName = getDayName(itemDate);
+
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td><span class="badge">${{dayName}}</span> ${{item.date}}</td>
+                        <td class="${{priceClass}}">${{item.price}}</td>
+                        <td>${{item.status}}</td>
+                    `;
+                    tbody.appendChild(tr);
+                }}
+            }});
+
+            if (tbody.children.length === 0) {{
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#888;">لا توجد رحلات مطابقة للفلاتر المحددة</td></tr>';
+            }}
+        }}
+
+        window.onload = filterFlights;
+    </script>
+</body>
+</html>"""
+
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(html_content)
 
