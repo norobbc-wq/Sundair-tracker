@@ -5,8 +5,8 @@ from playwright.sync_api import sync_playwright
 
 def scrape_sundair():
     routes = [
-        {"id": "BER_DAM", "origin": "BER", "destination": "DAM"},
-        {"id": "DAM_BER", "origin": "DAM", "destination": "BER"}
+        {"id": "BER_DAM", "from": "BER", "to": "DAM"},
+        {"id": "DAM_BER", "from": "DAM", "to": "BER"}
     ]
     
     extracted_data = {"BER_DAM": [], "DAM_BER": []}
@@ -14,18 +14,27 @@ def scrape_sundair():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800}
         )
         page = context.new_page()
 
         for route in routes:
             route_id = route["id"]
             try:
-                # الانتقال لموقع الحجز
                 page.goto("https://www.sundair.com/booking/#/", wait_until="networkidle", timeout=60000)
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(4000)
 
-                # محاكاة اختيار الوجهات إذا تطلب الأمر أو قراءة الرحلات المتاحة في الواجهة
+                # إغلاق تنبيه الكوكيز إن وجد
+                try:
+                    cookie_btn = page.query_selector("button:has-text('Akzeptieren'), button:has-text('Accept')")
+                    if cookie_btn:
+                        cookie_btn.click()
+                        page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+
+                # استخراج النصوص
                 page_text = page.evaluate("() => document.body.innerText")
                 lines = page_text.split('\n')
                 
@@ -62,6 +71,9 @@ def build_interactive_html(data):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>أسعار Sundair الحية</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; padding: 15px; color: #333; }}
@@ -125,7 +137,7 @@ def build_interactive_html(data):
 
         function parseGermanDateStr(dateStr) {{
             const parts = dateStr.split('.');
-            return `${{parts[2]}}-${{parts[1]}}-${{parts[0]}}`; // تحويل إلى YYYY-MM-DD
+            return `${{parts[2]}}-${{parts[1]}}-${{parts[0]}}`;
         }}
 
         function getDayName(dateStr) {{
